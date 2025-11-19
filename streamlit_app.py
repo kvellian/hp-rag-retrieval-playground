@@ -37,7 +37,6 @@ PROFILE_NAMES = list(RETRIEVAL_PROFILES.keys())
 # Query normalization helpers
 # =============================================================================
 
-# Simple heuristic synonym normalization for kinship terms
 KINSHIP_REPLACEMENTS = {
     r"\bmom\b": "mother",
     r"\bmum\b": "mother",
@@ -160,45 +159,12 @@ def call_llm(question: str, context: str, model_name: str, temperature: float) -
 
 
 # =============================================================================
-# Streamlit UI
+# Streamlit UI (NO SIDEBAR, default gpt-4o-mini)
 # =============================================================================
 
 st.set_page_config(page_title="HP RAG — Retrieval Playground", layout="wide")
 
-# ---------- Sidebar: settings ----------
-st.sidebar.title("Settings")
-
-# Retrieval profile
-try:
-    default_profile_index = PROFILE_NAMES.index(DEFAULT_PROFILE_NAME)
-except ValueError:
-    default_profile_index = 0
-
-profile_name = st.sidebar.selectbox(
-    "Retrieval profile",
-    PROFILE_NAMES,
-    index=default_profile_index,
-)
-
-profile_cfg = RETRIEVAL_PROFILES.get(profile_name, RETRIEVAL_PROFILES[DEFAULT_PROFILE_NAME])
-default_alpha = float(profile_cfg.get("alpha", 0.6))
-default_k = int(profile_cfg.get("k", 5))
-
-# Top-k slider (how many passages we actually use)
-top_k = st.sidebar.slider("Top-k passages", min_value=3, max_value=20, value=min(5, default_k), step=1)
-
-# Alpha slider
-alpha = st.sidebar.slider("Hybrid weight α", min_value=0.0, max_value=1.0, value=default_alpha, step=0.05)
-
-# OpenAI model selection (DEFAULT = gpt-4o-mini)
-OPENAI_MODELS = ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"]
-openai_model = st.sidebar.selectbox("OpenAI model", OPENAI_MODELS, index=0)
-
-temperature = st.sidebar.slider("Temperature", min_value=0.0, max_value=1.0, value=0.2, step=0.05)
-
-show_passages = st.sidebar.checkbox("Show retrieved passages", value=True)
-
-# ---------- Main layout ----------
+# ---------- Header ----------
 st.title("⚡ Harry Potter RAG — Retrieval Playground")
 
 st.markdown(
@@ -221,6 +187,61 @@ uses a Retrieval-Augmented Generation (RAG) pipeline:
         """
     )
 
+# ---------- Settings row (replaces sidebar) ----------
+st.markdown("### Settings")
+
+# Figure out default profile index
+try:
+    default_profile_index = PROFILE_NAMES.index(DEFAULT_PROFILE_NAME)
+except ValueError:
+    default_profile_index = 0
+
+col1, col2, col3, col4 = st.columns([1.6, 1.2, 1.2, 1.2])
+
+with col1:
+    profile_name = st.selectbox(
+        "Retrieval profile",
+        PROFILE_NAMES,
+        index=default_profile_index,
+    )
+
+profile_cfg = RETRIEVAL_PROFILES.get(profile_name, RETRIEVAL_PROFILES[DEFAULT_PROFILE_NAME])
+default_alpha = float(profile_cfg.get("alpha", 0.6))
+default_k = int(profile_cfg.get("k", 5))
+
+with col2:
+    top_k = st.slider(
+        "Top-k passages",
+        min_value=3,
+        max_value=20,
+        value=min(5, default_k),
+        step=1,
+    )
+
+with col3:
+    alpha = st.slider(
+        "Hybrid weight α",
+        min_value=0.0,
+        max_value=1.0,
+        value=default_alpha,
+        step=0.05,
+    )
+
+with col4:
+    temperature = st.slider(
+        "Temperature",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.2,
+        step=0.05,
+    )
+
+# Always use gpt-4o-mini; no dropdown
+openai_model = "gpt-4o-mini"
+
+show_passages = st.checkbox("Show retrieved passages", value=True)
+
+# ---------- Question + results ----------
 st.markdown("## Ask a question about the Harry Potter books")
 
 query = st.text_input("Type your question", placeholder="Who is Harry's mom?")
@@ -240,7 +261,6 @@ if ask_clicked and query.strip():
     retrieval_t0 = time.time()
     with st.status("🔍 Retrieving relevant passages...", expanded=True) as status_box:
         try:
-            # Use our hp_search.run_search wrapper
             results: List[Dict[str, Any]] = run_search(
                 query=norm_q,
                 k=int(top_k),
@@ -264,7 +284,6 @@ if ask_clicked and query.strip():
     # ==============================
     # Build context + call LLM
     # ==============================
-    # Build context string from the retrieved passages
     context_chunks = [r.get("text", "") for r in results if r.get("text")]
     context = "\n\n".join(context_chunks)
 
@@ -294,7 +313,11 @@ if ask_clicked and query.strip():
         for i, r in enumerate(results, start=1):
             title = r.get("title") or f"Chunk {i}"
             score = r.get("score", 0.0)
-            header = f"[{i}] {title} — score={score:.4f}" if isinstance(score, (int, float)) else f"[{i}] {title}"
+            header = (
+                f"[{i}] {title} — score={score:.4f}"
+                if isinstance(score, (int, float))
+                else f"[{i}] {title}"
+            )
             with st.expander(header):
                 meta_bits = []
                 if r.get("book"):
@@ -305,7 +328,6 @@ if ask_clicked and query.strip():
                     st.markdown(" | ".join(meta_bits))
                 st.write(r.get("text", ""))
 
-    # Optional debug info
     with st.expander("🔧 Debug info"):
         st.json(
             {
