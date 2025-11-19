@@ -1,113 +1,90 @@
-from __future__ import annotations
+"""
+hp_search.py
+Clean, simple interface for calling the hybrid retriever.
 
-from typing import List, Dict, Any
+This module exposes one function:
 
+    run_search(query, base_k, exp_k, model_key, alpha, top_return, apply_boosts=True)
+
+which returns:
+    {
+        "results": DataFrame,
+        "expanded_query": None
+    }
+
+It wraps the `search_hybrid` function from retrieval_api.py.
+"""
+
+from typing import Optional, Dict, Any
 import pandas as pd
 
+# Import the hybrid retriever
 from retrieval_api import search_hybrid
-from retrieval_profiles import RETRIEVAL_PROFILES, DEFAULT_PROFILE_NAME
-
-# Map old profile names (from earlier notebooks/UI) to the new ones.
-PROFILE_ALIASES = {
-    "hybrid_minilm_bm25": "fast_minilm",
-    "prod_default": "prod_e5_balanced",
-}
 
 
-def _resolve_profile(
-    profile_name: str | None,
-    k: int | None,
-    alpha: float | None,
-) -> tuple[str, str, int, float]:
+# ----------------------------------------------------------------------
+# MAIN ENTRY POINT FOR THE STREAMLIT APP
+# ----------------------------------------------------------------------
+def run_search(
+    query: str,
+    base_k: int,
+    exp_k: int,
+    model_key: str,
+    alpha: float,
+    top_return: int,
+    apply_boosts: bool = True,
+) -> Dict[str, Any]:
     """
-    Decide which retrieval profile + parameters to actually use.
-    Returns (resolved_profile_name, model_key, k_eff, alpha_eff).
+    Execute a hybrid semantic search over the HP corpus.
+
+    Parameters
+    ----------
+    query : str
+        The normalized question (LLM-normalized + synonym rewrite).
+    base_k : int
+        k to return after re-ranking.
+    exp_k : int
+        How many FAISS neighbors to retrieve before re-ranking.
+    model_key : str
+        Which embedding model to use (minilm_l6, e5_small, bge_base).
+    alpha : float
+        Weight for semantic vs lexical score (semantic_weight = alpha).
+    top_return : int
+        Number of top passages to return to the UI.
+    apply_boosts : bool
+        Whether to apply title/entity boosts & penalties. (Kept for future flexibility.)
+
+    Returns
+    -------
+    dict with:
+        "results": DataFrame of retrieved passages (text + metadata + scores)
+        "expanded_query": None  (placeholder for future expansion)
     """
-    if not profile_name:
-        profile_name = DEFAULT_PROFILE_NAME
 
-    # If the UI sends an old name, map it to a new profile
-    profile_name = PROFILE_ALIASES.get(profile_name, profile_name)
+    # NOTE: The deployed retrieval currently uses semantic-only scoring
+    # due to safety constraints (no TF-IDF matrix shipped).
+    # alpha is still passed for forward compatibility.
 
-    profile = RETRIEVAL_PROFILES.get(profile_name, RETRIEVAL_PROFILES[DEFAULT_PROFILE_NAME])
-
-    model_key = profile.get("model", "minilm_l6")
-    # If the UI slider gives k, let it override; otherwise use profile default
-    k_eff = int(k) if k is not None and k > 0 else int(profile.get("k", 5))
-
-    # If the UI slider gives alpha, let it override; otherwise use profile default
-    if alpha is None:
-        alpha_eff = float(profile.get("alpha", 0.6))
-    else:
-        alpha_eff = float(alpha)
-
-    # Sanity checks
-    k_eff = max(k_eff, 1)
-
-    return profile_name, model_key, k_eff, alpha_eff
-
-
-def run_search(query: str, k: int, alpha: float, profile_name: str) -> List[Dict[str, Any]]:
-    """
-    Main entry point used by streamlit_app.py.
-
-    Args:
-        query: user question
-        k:     requested top-k (may be overridden by profile)
-        alpha: requested alpha (may be overridden by profile)
-        profile_name: retrieval profile key from the UI
-
-    Returns:
-        List of dicts with at least:
-          - title
-          - text
-          - book
-          - chapter
-          - score
-    """
-    profile_name, model_key, k_eff, alpha_eff = _resolve_profile(
-        profile_name=profile_name,
-        k=k,
+    # Call underlying retrieval engine
+    hits_df = search_hybrid(
+        query,
+        k=top_return,   # how many results returned AFTER reranking
         alpha=alpha,
-    )
-
-    # Call the underlying retriever (semantic-only hybrid wrapper)
-    hits_df: pd.DataFrame = search_hybrid(
-        query=query,
-        k=k_eff,
-        alpha=alpha_eff,
         key=model_key,
-        m=None,                 # let retrieval_api choose suitable M
-        enable_house_bias=False # keep things simple for the public demo
+        m=exp_k,        # FAISS search depth
     )
 
-    results: List[Dict[str, Any]] = []
+    # Ensure DataFrame
+    if not isinstance(hits_df, pd.DataFrame):
+        try:
+            hits_df = pd.DataFrame(hits_df)
+        except Exception:
+            raise ValueError("search_hybrid did not return a DataFrame-like result.")
 
-    for _, row in hits_df.iterrows():
-        # Build a nice human-readable title from whatever metadata we have
-        title_parts = []
+    # Trim to requested top N
+    results = hits_df.head(top_return).reset_index(drop=True)
 
-        if "book" in row and pd.notna(row["book"]):
-            title_parts.append(str(row["book"]))
-
-        if "chapter" in row and pd.notna(row["chapter"]):
-            title_parts.append(str(row["chapter"]))
-
-        if "title" in row and pd.notna(row["title"]):
-            title_parts.append(str(row["title"]))
-
-        title = " — ".join(title_parts) if title_parts else "Passage"
-
-        results.append(
-            {
-                "title": title,
-                "text": row.get("text", ""),
-                "book": row.get("book"),
-                "chapter": row.get("chapter"),
-                "score": float(row.get("final_score", 0.0)),
-                "profile": profile_name,
-                "model_key": model_key,
-            }
-        )
-
-    return results
+    return {
+        "results": results,
+        "expanded_query": None,     # placeholder for optional LLM expansions
+    }
