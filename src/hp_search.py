@@ -1,78 +1,113 @@
-"""
-hp_search.py
+from __future__ import annotations
 
-Lightweight search wrapper for the Streamlit app.
+from typing import List, Dict, Any
 
-- Uses repo-relative paths via retrieval_api (no /content, no Colab deps)
-- Exposes a single function: run_search(query, k, model_key)
-"""
-
-from typing import Dict
 import pandas as pd
 
-from retrieval_api import (
-    search_semantic,
-    EMBED_MODELS,
-)
+from retrieval_api import search_hybrid
+from retrieval_profiles import RETRIEVAL_PROFILES, DEFAULT_PROFILE_NAME
 
-# Default embedding model key (must exist in EMBED_MODELS)
-DEFAULT_MODEL_KEY = "minilm_l6"
+# Map old profile names (from earlier notebooks/UI) to the new ones.
+PROFILE_ALIASES = {
+    "hybrid_minilm_bm25": "fast_minilm",
+    "prod_default": "prod_e5_balanced",
+}
 
 
-def get_available_models() -> Dict[str, str]:
+def _resolve_profile(
+    profile_name: str | None,
+    k: int | None,
+    alpha: float | None,
+) -> tuple[str, str, int, float]:
     """
-    Return a mapping of model_key -> human-readable name.
-    Used by the Streamlit UI to populate the dropdown.
+    Decide which retrieval profile + parameters to actually use.
+    Returns (resolved_profile_name, model_key, k_eff, alpha_eff).
     """
-    nice_names = {
-        "minilm_l6": "MiniLM-L6 (small, fast, great baseline)",
-        "e5_small": "E5-small-v2 (instruction-tuned)",
-        "bge_base": "BGE-base-en-v1.5 (stronger, heavier)",
-    }
-    return {
-        key: nice_names.get(key, key)
-        for key in EMBED_MODELS.keys()
-    }
+    if not profile_name:
+        profile_name = DEFAULT_PROFILE_NAME
+
+    # If the UI sends an old name, map it to a new profile
+    profile_name = PROFILE_ALIASES.get(profile_name, profile_name)
+
+    profile = RETRIEVAL_PROFILES.get(profile_name, RETRIEVAL_PROFILES[DEFAULT_PROFILE_NAME])
+
+    model_key = profile.get("model", "minilm_l6")
+    # If the UI slider gives k, let it override; otherwise use profile default
+    k_eff = int(k) if k is not None and k > 0 else int(profile.get("k", 5))
+
+    # If the UI slider gives alpha, let it override; otherwise use profile default
+    if alpha is None:
+        alpha_eff = float(profile.get("alpha", 0.6))
+    else:
+        alpha_eff = float(alpha)
+
+    # Sanity checks
+    k_eff = max(k_eff, 1)
+
+    return profile_name, model_key, k_eff, alpha_eff
 
 
-def run_search(
-    query: str,
-    k: int = 5,
-    model_key: str = DEFAULT_MODEL_KEY,
-) -> pd.DataFrame:
+def run_search(query: str, k: int, alpha: float, profile_name: str) -> List[Dict[str, Any]]:
     """
-    Run a semantic search over precomputed HP chunks.
+    Main entry point used by streamlit_app.py.
 
     Args:
-        query: User question / search text.
-        k:     Number of results to return.
-        model_key: One of EMBED_MODELS keys.
+        query: user question
+        k:     requested top-k (may be overridden by profile)
+        alpha: requested alpha (may be overridden by profile)
+        profile_name: retrieval profile key from the UI
 
     Returns:
-        pandas.DataFrame with at least:
-        ['title', 'book', 'chapter', 'chunk_id', 'text', 'score']
+        List of dicts with at least:
+          - title
+          - text
+          - book
+          - chapter
+          - score
     """
-    query = (query or "").strip()
-    if not query:
-        return pd.DataFrame()
+    profile_name, model_key, k_eff, alpha_eff = _resolve_profile(
+        profile_name=profile_name,
+        k=k,
+        alpha=alpha,
+    )
 
-    if model_key not in EMBED_MODELS:
-        model_key = DEFAULT_MODEL_KEY
+    # Call the underlying retriever (semantic-only hybrid wrapper)
+    hits_df: pd.DataFrame = search_hybrid(
+        query=query,
+        k=k_eff,
+        alpha=alpha_eff,
+        key=model_key,
+        m=None,                 # let retrieval_api choose suitable M
+        enable_house_bias=False # keep things simple for the public demo
+    )
 
-    # Delegate to retrieval_api; this will:
-    # - Load hp_chunks.parquet from data/processed
-    # - Load the FAISS index for the chosen model
-    # - Encode the query and search
-    hits = search_semantic(query=query, k=k, key=model_key)
+    results: List[Dict[str, Any]] = []
 
-    # For safety, make sure we always have a DataFrame
-    if not isinstance(hits, pd.DataFrame):
-        hits = pd.DataFrame(hits)
+    for _, row in hits_df.iterrows():
+        # Build a nice human-readable title from whatever metadata we have
+        title_parts = []
 
-    # Rename score column if needed
-    if "score" not in hits.columns:
-        # Our retrieval_api uses 'sem_score' – expose a generic 'score' too
-        if "sem_score" in hits.columns:
-            hits["score"] = hits["sem_score"]
+        if "book" in row and pd.notna(row["book"]):
+            title_parts.append(str(row["book"]))
 
-    return hits
+        if "chapter" in row and pd.notna(row["chapter"]):
+            title_parts.append(str(row["chapter"]))
+
+        if "title" in row and pd.notna(row["title"]):
+            title_parts.append(str(row["title"]))
+
+        title = " — ".join(title_parts) if title_parts else "Passage"
+
+        results.append(
+            {
+                "title": title,
+                "text": row.get("text", ""),
+                "book": row.get("book"),
+                "chapter": row.get("chapter"),
+                "score": float(row.get("final_score", 0.0)),
+                "profile": profile_name,
+                "model_key": model_key,
+            }
+        )
+
+    return results
