@@ -192,6 +192,12 @@ using the three tuned embedding models:
 1. Pick a **retrieval profile** in the Settings section below. Notice how it sets the embedding model, α, and k defaults.  
 2. Type a Harry Potter question in the box and click **Ask**.  
 3. Play with **Hybrid weight α (dense vs lexical)** and **Top-k passages** to see how the retrieved passages and scores change.  
+
+   - **Low α (near 0.0)** → puts more weight on **lexical** / keyword-style matching.  
+   - **High α (near 1.0)** → puts more weight on **dense** semantic embeddings.  
+   - **Low Top-k (3–5)** → uses only the very top passages (more focused, but may miss supporting context).  
+   - **High Top-k (15–20)** → uses more passages (broader context, but may include extra noise).  
+
 4. Review the **Answer** and **Latency** sections to see how the system behaves.  
 5. Toggle **Show retrieved passages** if you want to inspect the chunks that the model is using.  
 6. Adjust the **Temperature** slider to test how random / creative the LLM model’s answers are.  
@@ -231,7 +237,6 @@ model_key = profile_cfg.get("model", "e5_small")
 
 with col2:
     st.markdown("**Embedding model**")
-    # Small badge-style code block
     st.markdown(f"`{model_key}`")
 
 with col3:
@@ -242,6 +247,8 @@ with col3:
         value=min(5, default_k),
         step=1,
     )
+    # Permanent range hint
+    st.caption("Range: 3 (very few passages) → 20 (many passages)")
 
 with col4:
     alpha = st.slider(
@@ -251,6 +258,8 @@ with col4:
         value=default_alpha,
         step=0.05,
     )
+    # Permanent range hint
+    st.caption("0.0 = lexical-heavy · 1.0 = dense-heavy")
 
 with col5:
     temperature = st.slider(
@@ -260,6 +269,8 @@ with col5:
         value=0.2,
         step=0.05,
     )
+    # Permanent range hint
+    st.caption("0.0 = deterministic · 1.0 = very random/creative")
 
 # Always use gpt-4o-mini; no dropdown
 openai_model = "gpt-4o-mini"
