@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -9,15 +10,12 @@ import streamlit as st
 # ------------------------------------------------------------------
 # Paths & imports
 # ------------------------------------------------------------------
-# Repo root (directory containing this file)
 BASE_DIR = Path(__file__).resolve().parent
 SRC_DIR = BASE_DIR / "src"
 
-# Make src/ importable
 if str(SRC_DIR) not in sys.path:
     sys.path.append(str(SRC_DIR))
 
-# Import our retrieval engine + profiles
 try:
     from hp_search import run_search as hp_search_fn
 except Exception as e:
@@ -36,7 +34,6 @@ PROFILE_NAMES = list(RETRIEVAL_PROFILES.keys())
 # Query normalization helpers
 # ------------------------------------------------------------------
 
-# Simple heuristic synonym normalization for kinship terms
 KINSHIP_REPLACEMENTS = {
     r"\bmom\b": "mother",
     r"\bmum\b": "mother",
@@ -46,10 +43,6 @@ KINSHIP_REPLACEMENTS = {
 
 
 def apply_kinship_synonyms(raw_query: str) -> tuple[str, str]:
-    """
-    Replace informal kinship terms (mom, dad, etc.) with more formal versions
-    that actually appear in the HP corpus (mother, father).
-    """
     q = raw_query or ""
     original = q
     for pattern, repl in KINSHIP_REPLACEMENTS.items():
@@ -64,8 +57,8 @@ def apply_kinship_synonyms(raw_query: str) -> tuple[str, str]:
 
 def normalize_query_with_llm(raw_query: str) -> tuple[str, str]:
     """
-    Use a small LLM to rewrite the question into clean, canonical Harry Potter phrasing.
-    If no API key is set or anything fails, returns the original query.
+    Try to clean up the question with gpt-4o-mini.
+    If anything fails or no key is set, return the original query.
     """
     raw_query = (raw_query or "").strip()
     if not raw_query:
@@ -109,12 +102,12 @@ def normalize_query_with_llm(raw_query: str) -> tuple[str, str]:
 
 
 # ------------------------------------------------------------------
-# LLM helpers for answering
+# LLM helpers for answering (always gpt-4o-mini)
 # ------------------------------------------------------------------
 
 def build_hp_prompt(question: str, context: str) -> str:
     return (
-        "You are an assistant that answers questions.\n"
+        "You are an assistant that answers Harry Potter questions.\n"
         "Use ONLY the context below. If the answer is not in the context, say so.\n\n"
         f"Question: {question}\n\n"
         "Context:\n"
@@ -137,8 +130,8 @@ def call_llm(question: str, context: str) -> str:
         from openai import OpenAI
 
         client = OpenAI(api_key=api_key)
-
         prompt = build_hp_prompt(question, context)
+
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -157,7 +150,7 @@ def call_llm(question: str, context: str) -> str:
 
 
 # ------------------------------------------------------------------
-# Streamlit UI (no sidebar)
+# Streamlit UI (no sidebar, NB11-style text)
 # ------------------------------------------------------------------
 
 st.set_page_config(page_title="HP RAG — Retrieval Playground", layout="wide")
@@ -177,13 +170,13 @@ st.markdown(
 This app lets you **interactively explore** the retrieval behavior of your RAG system
 using the three tuned embedding models:
 
-- `prod_e5_balanced` → **e5_small** (α=0.35, k=15) — balanced accuracy + latency  
-- `fast_minilm` → **minilm_l6** (α=0.50, k=17) — fastest model with strong hit@k  
-- `max_precision_bge` → **bge_base** (α=0.40, k=16) — highest early precision (heavier model)
+- `prod_e5_balanced` → **e5_small** — balanced accuracy + latency  
+- `fast_minilm` → **minilm_l6** — fastest model with strong hit@k  
+- `max_precision_bge` → **bge_base** — highest early precision (heavier model)
 
 **How to use this playground:**
 
-1. Pick a **retrieval profile** above. Notice how it sets the embedding model, α, and k defaults.  
+1. Pick a **retrieval profile** below. Notice how it sets the embedding model, α, and k defaults.  
 2. Type a Harry Potter question in the box and click **Search**.  
 3. Play with **α (dense vs lexical)** and **Base k** to see how the retrieved passages and scores change.  
 4. Adjust **Expanded k**, **Show top N**, and **Use LLM to answer** if you want more passages or a generated answer.
@@ -209,10 +202,8 @@ default_k = int(profile_cfg["k"])
 
 with col_model:
     st.markdown("**Embedding model**")
-    # Read-only: driven by the selected profile
     st.write(f"`{default_model}`")
 
-# The model used for retrieval is fixed by the profile
 model_key = default_model
 
 with col_alpha:
@@ -224,7 +215,7 @@ with col_k:
 with col_topn:
     top_n = st.slider("Show top N", 3, 15, 5, 1)
 
-# second row: expanded k + options
+# Second row: expanded k + options
 col_exp, col_llm, col_debug = st.columns([1, 1, 1])
 with col_exp:
     exp_k = st.slider("Expanded k", 10, 80, min(3 * base_k, 80), 1)
@@ -248,6 +239,7 @@ if st.button("Search") and query.strip():
     norm_q, norm_info = normalize_query_with_llm(kin_q)
 
     # ---- Run retrieval on the normalized query ----
+    t0 = time.time()
     out = hp_search_fn(
         query=norm_q,
         base_k=int(base_k),
@@ -257,6 +249,7 @@ if st.button("Search") and query.strip():
         top_return=int(top_n),
         apply_boosts=True,
     )
+    retrieval_time = time.time() - t0
 
     st.subheader("🔍 Query info")
     st.write("**Original query:**", raw_q)
@@ -276,6 +269,33 @@ if st.button("Search") and query.strip():
         st.warning("No passages retrieved.")
         st.stop()
 
+    # Build context (all returned passages)
+    texts = results_df.get("text", pd.Series([], dtype=str)).fillna("")
+    context = "\n\n".join(texts.tolist())
+
+    # ---- Answer section ----
+    st.subheader("✅ Answer")
+    if use_llm:
+        t1 = time.time()
+        answer = call_llm(raw_q, context)
+        llm_time = time.time() - t1
+        st.write(answer)
+    else:
+        llm_time = 0.0
+        snippet = (context or "").strip()[:900]
+        if snippet:
+            st.write("LLM disabled. Showing retrieved context snippet:")
+            st.code(snippet)
+        else:
+            st.write("No context retrieved.")
+
+    # ---- Latency section ----
+    st.subheader("⏱️ Latency")
+    st.write(f"Retrieval: {retrieval_time:.2f} s")
+    if use_llm:
+        st.write(f"LLM generation: {llm_time:.2f} s")
+
+    # ---- Top passages table ----
     st.subheader("📚 Top passages")
     display_cols = [
         c
@@ -296,23 +316,7 @@ if st.button("Search") and query.strip():
     else:
         st.dataframe(results_df, use_container_width=True)
 
-    # Build context: use all returned passages' text
-    texts = results_df.get("text", pd.Series([], dtype=str)).fillna("")
-    context = "\n\n".join(texts.tolist())
-
-    st.subheader("🧠 Answer")
-    if use_llm:
-        # We ask on the ORIGINAL question, but with context from normalized query.
-        answer = call_llm(raw_q, context)
-        st.write(answer)
-    else:
-        snippet = (context or "").strip()[:900]
-        if snippet:
-            st.write("LLM disabled. Showing retrieved context snippet:")
-            st.code(snippet)
-        else:
-            st.write("No context retrieved.")
-
+    # ---- Detailed passages ----
     st.subheader("📖 Passages")
     for i, row in results_df.iterrows():
         header = f"{i+1}. {row.get('title','(no title)')}"
