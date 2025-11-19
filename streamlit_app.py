@@ -249,27 +249,16 @@ if st.button("Search") and query.strip():
     norm_q, norm_info = normalize_query_with_llm(kin_q)
 
     # ---- Run retrieval on the normalized query ----
-    try:
-        out = hp_search_fn(
-            norm_q,
-            base_k=int(base_k),
-            exp_k=int(exp_k),
-            model_key=model_key,
-            alpha=float(alpha),
-            top_return=int(top_n),
-            apply_boosts=True,
-        )
-    except TypeError:
-        # Backward-compat path (older signature – shouldn't be used now)
-        out = hp_search_fn(
-            norm_q,
-            base_k=int(base_k),
-            exp_k=int(exp_k),
-            key=model_key,  # type: ignore[arg-type]
-            alpha=float(alpha),
-            top_return=int(top_n),
-            apply_boosts=True,
-        )
+    # IMPORTANT: use positional args to match run_search signature exactly
+    out = hp_search_fn(
+        norm_q,
+        int(base_k),
+        int(exp_k),
+        model_key,
+        float(alpha),
+        int(top_n),
+        True,  # apply_boosts
+    )
 
     st.subheader("🔍 Query info")
     st.write("**Original query:**", raw_q)
