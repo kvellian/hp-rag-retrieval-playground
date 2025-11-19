@@ -1,192 +1,385 @@
-# Retrieval API for HP RAG — repo-relative, Streamlit-friendly version
+from __future__ import annotations
 
+import os
+import sys
 import re
+import time
 from pathlib import Path
+from typing import List, Dict, Any
 
-import faiss
-import numpy as np
-import pandas as pd
-import yaml
-from sentence_transformers import SentenceTransformer
+import streamlit as st
 
-# --------------------------------------------------------------------------------------
-# Paths: resolve relative to the repo root (…/hp-rag-retrieval-playground)
-# --------------------------------------------------------------------------------------
+# =============================================================================
+# Paths & imports
+# =============================================================================
 
-# /repo/src/retrieval_api.py  -> parent is /repo/src -> parent.parent is /repo
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent
+SRC_DIR = BASE_DIR / "src"
 
-DATA_DIR = BASE_DIR / "data"
-PROCESSED_DIR = DATA_DIR / "processed"
-IDX_DIR = DATA_DIR / "indexes"
-CFG = BASE_DIR / "config" / "retrieval.yml"
+if str(SRC_DIR) not in sys.path:
+    sys.path.append(str(SRC_DIR))
 
-# --------------------------------------------------------------------------------------
-# Embedding models / FAISS indexes
-# --------------------------------------------------------------------------------------
+try:
+    from hp_search import run_search
+except Exception as e:
+    st.error(f"Failed to import run_search from hp_search: {e}")
+    st.stop()
 
-EMBED_MODELS = {
-    "minilm_l6": "sentence-transformers/all-MiniLM-L6-v2",
-    "e5_small": "intfloat/e5-small-v2",
-    "bge_base": "BAAI/bge-base-en-v1.5",
+try:
+    from retrieval_profiles import RETRIEVAL_PROFILES, DEFAULT_PROFILE_NAME
+except Exception as e:
+    st.error(f"Failed to import retrieval_profiles: {e}")
+    st.stop()
+
+PROFILE_NAMES = list(RETRIEVAL_PROFILES.keys())
+
+# =============================================================================
+# Query normalization helpers
+# =============================================================================
+
+KINSHIP_REPLACEMENTS = {
+    r"\bmom\b": "mother",
+    r"\bmum\b": "mother",
+    r"\bdad\b": "father",
+    r"\bdaddy\b": "father",
 }
 
 
-def _prep_query_text(key: str, q: str) -> str:
-    """For some models (e5, bge), we need the 'query: ' prefix."""
-    if key.startswith("e5_") or key.startswith("bge_"):
-        return f"query: {q}"
-    return q
-
-
-def _minmax(x: np.ndarray) -> np.ndarray:
-    """Safe min–max normalization to [0, 1]."""
-    x = np.asarray(x, dtype=np.float32)
-    rng = np.ptp(x)
-    if rng == 0.0:
-        return np.zeros_like(x)
-    return (x - x.min()) / (rng + 1e-9)
-
-
-# --------------------------------------------------------------------------------------
-# Load corpus chunks
-# --------------------------------------------------------------------------------------
-
-if (PROCESSED_DIR / "hp_chunks.parquet").exists():
-    chunks = pd.read_parquet(PROCESSED_DIR / "hp_chunks.parquet")
-elif (PROCESSED_DIR / "hp_chunks.csv").exists():
-    chunks = pd.read_csv(PROCESSED_DIR / "hp_chunks.csv")
-else:
-    raise FileNotFoundError(
-        f"No processed chunks found.\n"
-        f"Expected one of:\n"
-        f"  - {PROCESSED_DIR / 'hp_chunks.parquet'}\n"
-        f"  - {PROCESSED_DIR / 'hp_chunks.csv'}"
-    )
-
-# --------------------------------------------------------------------------------------
-# Load config
-# --------------------------------------------------------------------------------------
-
-if CFG.exists():
-    with open(CFG, "r", encoding="utf-8") as f:
-        _cfg = yaml.safe_load(f) or {}
-else:
-    _cfg = {}
-
-DEFAULTS = _cfg.get("defaults", {})
-ALPHAS = _cfg.get("alphas", {k: 0.6 for k in EMBED_MODELS})
-
-BONUS1 = float(DEFAULTS.get("title_bonus_1tok", 0.05))
-BONUS2 = float(DEFAULTS.get("title_bonus_2tok", 0.05))
-ENTITY_BOOST = float(DEFAULTS.get("entity_boost", 1.08))
-SHORT_PENALTY_LEN = int(DEFAULTS.get("short_penalty_len", 80))
-SHORT_PENALTY = float(DEFAULTS.get("short_penalty", 0.95))
-TOP_M = int(DEFAULTS.get("top_m", 200))
-
-# --------------------------------------------------------------------------------------
-# Lazy loading of FAISS indexes + embedding models
-# --------------------------------------------------------------------------------------
-
-_loaded = {}
-
-
-def _load_faiss_and_model(key: str = "minilm_l6"):
-    """Load FAISS index + sentence transformer for the requested model key."""
-    idx_path = IDX_DIR / f"faiss_{key}.index"
-    if not idx_path.exists():
-        raise FileNotFoundError(f"FAISS index not found: {idx_path}")
-
-    index = faiss.read_index(str(idx_path))
-    model = SentenceTransformer(EMBED_MODELS[key])
-    return index, model
-
-
-# --------------------------------------------------------------------------------------
-# Main search function
-# --------------------------------------------------------------------------------------
-
-def search_hybrid(
-    query: str,
-    k: int = 5,
-    alpha: float | None = None,
-    key: str = "minilm_l6",
-    m: int | None = None,
-    enable_house_bias: bool = False,  # kept for future extension
-):
+def apply_kinship_synonyms(raw_query: str) -> tuple[str, str]:
     """
-    Hybrid-ish search: FAISS semantic search + title/entity tweaks.
-    (Lexical TF-IDF/BM25 part is disabled in the Streamlit deployment because
-    precomputed artifacts are not shipped in the repo.)
-
-    Args:
-        query: User question.
-        k: How many results to return.
-        alpha: Kept for config compatibility; not used in the current scoring.
-        key: Embedding model key ('minilm_l6', 'e5_small', 'bge_base').
-        m: How many FAISS candidates to pull before re-ranking.
-           If None, uses max(k, TOP_M).
-        enable_house_bias: Placeholder flag (currently unused).
-
-    Returns:
-        pandas.DataFrame with top-k hits and scoring metadata.
+    Replace informal kinship terms (mom, dad, etc.) with more formal versions
+    that actually appear in the HP corpus (mother, father).
     """
-    if alpha is None:
-        alpha = float(ALPHAS.get(key, 0.6))
+    q = raw_query or ""
+    original = q
+    for pattern, repl in KINSHIP_REPLACEMENTS.items():
+        q = re.sub(pattern, repl, q, flags=re.IGNORECASE)
 
-    if key not in _loaded:
-        _loaded[key] = _load_faiss_and_model(key)
-    index, embed_model = _loaded[key]
+    if q == original:
+        info = "No kinship terms needed normalization."
+    else:
+        info = "Normalized kinship terms (e.g., mom→mother, dad→father) before retrieval."
+    return q, info
 
-    # Decide how many neighbors to retrieve from FAISS
-    if m is None:
-        m = TOP_M
-    m = int(max(m, k))
 
-    # --- Semantic similarity via FAISS ---
-    q_sem = _prep_query_text(key, query)
-    qv = embed_model.encode([q_sem], normalize_embeddings=True).astype("float32")
-    D, I = index.search(qv, m)
-    I = I[0]
-    sem = D[0].astype(np.float32)
+def normalize_query_with_llm(raw_query: str) -> tuple[str, str]:
+    """
+    Use a small LLM (gpt-4o-mini) to rewrite the question into clean,
+    canonical Harry Potter phrasing.
 
-    # Placeholder lexical score (since TF-IDF artifacts are not included)
-    lex = np.zeros_like(sem, dtype=np.float32)
+    If no API key is set or anything fails, returns the original query.
+    """
+    raw_query = (raw_query or "").strip()
+    if not raw_query:
+        return raw_query, "Empty query — nothing to normalize."
 
-    # --- Title / entity bonus ---
-    q_tokens = set(re.findall(r"\w+", query.lower()))
-    titles = (
-        chunks.iloc[I]["title"]
-        .fillna("")
-        .str.lower()
-        .str.findall(r"\w+")
-        .apply(set)
-    )
-    overlaps = titles.apply(lambda s: len(q_tokens & s)).to_numpy()
-    title_bonus = (
-        (overlaps > 0).astype(float) * BONUS1
-        + (overlaps > 1).astype(float) * BONUS2
-    )
-    entity_boost = np.where(overlaps > 0, ENTITY_BOOST, 1.0).astype(np.float32)
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return raw_query, "No OPENAI_API_KEY set — using original query."
 
-    # --- Short-length penalty ---
-    short_mask = chunks.iloc[I]["n_words"].to_numpy() < SHORT_PENALTY_LEN
-    penalties = np.where(short_mask, SHORT_PENALTY, 1.0).astype(np.float32)
+    try:
+        from openai import OpenAI
 
-    # --- Final score: semantic + tweaks (no lexical part in cloud) ---
-    s_sem = _minmax(sem)
-    final = (s_sem + title_bonus) * penalties * entity_boost
+        client = OpenAI(api_key=api_key)
 
-    hits = chunks.iloc[I].copy()
-    hits["sem"] = sem
-    hits["lex"] = lex  # kept for compatibility
-    hits["title_bonus"] = title_bonus
-    hits["penalty"] = penalties
-    hits["entity_boost"] = entity_boost
-    hits["final_score"] = final
+        system_msg = (
+            "You rewrite user questions.\n"
+            "Fix grammar, expand shorthand, and choose clearer wording.\n"
+            "Prefer formal terms (mother/father instead of mom/dad) and full names "
+            "when obvious (e.g., 'Harry' → 'Harry Potter').\n"
+            "Preserve the original meaning.\n"
+            "Return ONLY the rewritten question text, no explanations."
+        )
 
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": raw_query},
+            ],
+            temperature=0.2,
+        )
+        normalized = (resp.choices[0].message.content or "").strip()
+
+        if not normalized:
+            return raw_query, "LLM returned empty text — using original query."
+        if normalized == raw_query:
+            return normalized, "LLM normalization: no change (query already clean)."
+        return normalized, "LLM normalization: query rewritten for clarity/HP phrasing."
+    except Exception as e:
+        return raw_query, f"LLM normalization failed: {e} — using original query."
+
+
+# =============================================================================
+# LLM helpers for answering
+# =============================================================================
+
+def build_hp_prompt(question: str, context: str) -> str:
     return (
-        hits.sort_values("final_score", ascending=False)
-        .head(k)
-        .reset_index(drop=True)
+        "You answer questions about the Harry Potter books.\n"
+        "Use ONLY the context below. If the answer is not in the context, say so.\n\n"
+        f"Question: {question}\n\n"
+        "Context:\n"
+        f"{context}\n\n"
+        "Answer:"
     )
+
+
+def call_llm(question: str, context: str, model_name: str, temperature: float) -> str:
+    context = (context or "").strip()
+    if not context:
+        return "No context retrieved — cannot answer."
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        snippet = context[:700]
+        return "LLM disabled (no OPENAI_API_KEY). Showing retrieved context:\n\n" + snippet
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=api_key)
+
+        prompt = build_hp_prompt(question, context)
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You answer Harry Potter questions using only the provided context.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=float(temperature),
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        snippet = context[:700]
+        return f"LLM call failed ({e}). Showing context instead:\n\n" + snippet
+
+
+# =============================================================================
+# Streamlit UI (NO SIDEBAR, default gpt-4o-mini)
+# =============================================================================
+
+st.set_page_config(page_title="HP RAG — Retrieval Playground", layout="wide")
+
+# ---------- Header ----------
+st.title("⚡ Harry Potter RAG — Retrieval Playground")
+
+st.markdown(
+    """
+**Created by:** Ken Vellian  
+**Data Science Capstone Project**  
+**Professor:** David Hubbard — DePaul University, Fall 2026
+"""
+)
+
+# ---------- Explanation in an expander ----------
+with st.expander("What is this?", expanded=False):
+    st.markdown(
+        """
+### What is this?
+
+This app lets you **interactively explore** the retrieval behavior of your RAG system
+using the three tuned embedding models:
+
+- `prod_e5_balanced` → **e5_small** (α=0.35, k=15) — balanced accuracy + latency  
+- `fast_minilm` → **minilm_l6** (α=0.50, k=17) — fastest model with strong hit@k  
+- `max_precision_bge` → **bge_base** (α=0.40, k=16) — highest early precision (heavier model)  
+
+**How to use this playground:**
+
+1. Pick a **retrieval profile** in the Settings section below. Notice how it sets the embedding model, α, and k defaults.  
+2. Type a Harry Potter question in the box and click **Ask**.  
+3. Play with **Hybrid weight α (dense vs lexical)** and **Top-k passages** to see how the retrieved passages and scores change.  
+   * **Low α (near 0.0)** → puts more weight on **lexical** / keyword-style matching.  
+   * **High α (near 1.0)** → puts more weight on **dense** semantic embeddings.  
+   * **Low Top-k (3–5)** → uses only the very top passages (more focused, but may miss supporting context).  
+   * **High Top-k (15–20)** → uses more passages (broader context, but may include extra noise).  
+4. Review the **Answer** and **Latency** sections to see how the system behaves.  
+5. Toggle **Show retrieved passages** if you want to inspect the chunks that the model is using.  
+6. Adjust the **Temperature** slider to test how random / creative the LLM model’s answers are.  
+   * Low temperature is higher confidence and more conservative.  
+   * High temperature introduces more randomness and creativity (but can drift away from precise facts).  
+
+Behind the scenes, your question is lightly normalized (for example, “mom” → “mother”) and then sent to the retriever, but only your **original** question is shown in the UI.
+"""
+    )
+
+st.markdown("---")
+
+# ---------- Settings row (replaces sidebar) ----------
+st.markdown("### Settings")
+
+# Figure out default profile index
+try:
+    default_profile_index = PROFILE_NAMES.index(DEFAULT_PROFILE_NAME)
+except ValueError:
+    default_profile_index = 0
+
+# We’ll show: profile | embedding model badge | top-k | alpha | temperature
+col1, col2, col3, col4, col5 = st.columns([1.6, 1.1, 1.1, 1.1, 1.1])
+
+with col1:
+    profile_name = st.selectbox(
+        "Retrieval profile",
+        PROFILE_NAMES,
+        index=default_profile_index,
+    )
+
+# Get profile config and derived defaults
+profile_cfg = RETRIEVAL_PROFILES.get(profile_name, RETRIEVAL_PROFILES[DEFAULT_PROFILE_NAME])
+default_alpha = float(profile_cfg.get("alpha", 0.6))
+default_k = int(profile_cfg.get("k", 5))
+model_key = profile_cfg.get("model", "e5_small")
+
+with col2:
+    st.markdown("**Embedding model**")
+    st.markdown(f"`{model_key}`")
+
+with col3:
+    top_k = st.slider(
+        "Top-k passages",
+        min_value=3,
+        max_value=20,
+        value=default_k,
+        step=1,
+        key=f"top_k_{profile_name}",  # per-profile state so defaults follow k
+    )
+    st.caption("Range: 3 (very few passages) → 20 (many passages)")
+
+with col4:
+    alpha = st.slider(
+        "Hybrid weight α",
+        min_value=0.0,
+        max_value=1.0,
+        value=default_alpha,
+        step=0.05,
+        key=f"alpha_{profile_name}",  # per-profile state for α defaults
+    )
+    st.caption("0.0 = lexical-heavy · 1.0 = dense-heavy")
+
+with col5:
+    temperature = st.slider(
+        "Temperature",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.2,
+        step=0.05,
+    )
+    st.caption("0.0 = deterministic · 1.0 = very random/creative")
+
+# Always use gpt-4o-mini; no dropdown
+openai_model = "gpt-4o-mini"
+
+show_passages = st.checkbox("Show retrieved passages", value=True)
+
+# ---------- Question + results ----------
+st.markdown("## Ask a question about the Harry Potter books")
+
+query = st.text_input("🧙‍♂️ Ask a Harry Potter question", placeholder="Enter your question")
+ask_clicked = st.button("Ask")
+
+if ask_clicked and query.strip():
+    original_query = query.strip()
+
+    # ==============================
+    # Normalization + retrieval
+    # ==============================
+    overall_t0 = time.time()
+
+    kin_q, kin_info = apply_kinship_synonyms(original_query)
+    norm_q, norm_info = normalize_query_with_llm(kin_q)
+
+    retrieval_t0 = time.time()
+    with st.status("🔍 Retrieving relevant passages...", expanded=True) as status_box:
+        try:
+            results: List[Dict[str, Any]] = run_search(
+                query=norm_q,
+                k=int(top_k),
+                alpha=float(alpha),
+                profile_name=profile_name,
+            )
+            retrieval_t1 = time.time()
+            status_box.update(label="✅ Retrieval complete", state="complete")
+        except Exception as e:
+            retrieval_t1 = time.time()
+            status_box.update(label="❌ Retrieval failed", state="error")
+            st.error(f"Error during retrieval: {e}")
+            results = []
+
+    retrieval_latency = retrieval_t1 - retrieval_t0
+
+    if not results:
+        st.warning("No passages retrieved.")
+        st.stop()
+
+    # ==============================
+    # Build context + call LLM
+    # ==============================
+    context_chunks = [r.get("text", "") for r in results if r.get("text")]
+    context = "\n\n".join(context_chunks)
+
+    llm_t0 = time.time()
+    answer = call_llm(
+        question=original_query,
+        context=context,
+        model_name=openai_model,
+        temperature=temperature,
+    )
+    llm_t1 = time.time()
+    llm_latency = llm_t1 - llm_t0
+
+    # ==============================
+    # Display results
+    # ==============================
+
+    st.markdown("## ✅ Answer")
+    st.write(answer)
+
+    st.markdown("## ⏱ Latency")
+    st.write(f"Retrieval: **{retrieval_latency:.2f} s**")
+    st.write(f"LLM generation: **{llm_latency:.2f} s**")
+
+    if show_passages:
+        st.markdown("## 📖 Retrieved passages")
+        for i, r in enumerate(results, start=1):
+            title = r.get("title") or f"Chunk {i}"
+            score = r.get("score", 0.0)
+            header = (
+                f"[{i}] {title} — score={score:.4f}"
+                if isinstance(score, (int, float))
+                else f"[{i}] {title}"
+            )
+            with st.expander(header):
+                meta_bits = []
+                if r.get("book"):
+                    meta_bits.append(f"**Book:** {r['book']}")
+                if r.get("chapter"):
+                    meta_bits.append(f"**Chapter:** {r['chapter']}")
+                if meta_bits:
+                    st.markdown(" | ".join(meta_bits))
+                st.write(r.get("text", ""))
+
+    # Debug info
+    with st.expander("🔧 Debug info"):
+        st.json(
+            {
+                "original_query": original_query,
+                "kinship_normalized_query": kin_q,
+                "llm_normalized_query": norm_q,
+                "kinship_info": kin_info,
+                "llm_norm_info": norm_info,
+                "profile": profile_name,
+                "embedding_model": model_key,
+                "alpha": float(alpha),
+                "top_k": int(top_k),
+                "openai_model": openai_model,
+                "temperature": float(temperature),
+                "total_latency": time.time() - overall_t0,
+            }
+        )
+
+elif not query.strip():
+    st.info("Type a Harry Potter question above and click **Ask**.")
