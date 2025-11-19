@@ -1,4 +1,4 @@
- """
+"""
 hp_search.py
 Clean, simple interface for calling the hybrid retriever.
 
