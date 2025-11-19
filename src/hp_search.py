@@ -1,90 +1,78 @@
 """
 hp_search.py
-Clean, simple interface for calling the hybrid retriever.
 
-This module exposes one function:
+Lightweight search wrapper for the Streamlit app.
 
-    run_search(query, base_k, exp_k, model_key, alpha, top_return, apply_boosts=True)
-
-which returns:
-    {
-        "results": DataFrame,
-        "expanded_query": None
-    }
-
-It wraps the `search_hybrid` function from retrieval_api.py.
+- Uses repo-relative paths via retrieval_api (no /content, no Colab deps)
+- Exposes a single function: run_search(query, k, model_key)
 """
 
-from typing import Optional, Dict, Any
+from typing import Dict
 import pandas as pd
 
-# Import the hybrid retriever
-from retrieval_api import search_hybrid
+from retrieval_api import (
+    search_semantic,
+    EMBED_MODELS,
+)
+
+# Default embedding model key (must exist in EMBED_MODELS)
+DEFAULT_MODEL_KEY = "minilm_l6"
 
 
-# ----------------------------------------------------------------------
-# MAIN ENTRY POINT FOR THE STREAMLIT APP
-# ----------------------------------------------------------------------
+def get_available_models() -> Dict[str, str]:
+    """
+    Return a mapping of model_key -> human-readable name.
+    Used by the Streamlit UI to populate the dropdown.
+    """
+    nice_names = {
+        "minilm_l6": "MiniLM-L6 (small, fast, great baseline)",
+        "e5_small": "E5-small-v2 (instruction-tuned)",
+        "bge_base": "BGE-base-en-v1.5 (stronger, heavier)",
+    }
+    return {
+        key: nice_names.get(key, key)
+        for key in EMBED_MODELS.keys()
+    }
+
+
 def run_search(
     query: str,
-    base_k: int,
-    exp_k: int,
-    model_key: str,
-    alpha: float,
-    top_return: int,
-    apply_boosts: bool = True,
-) -> Dict[str, Any]:
+    k: int = 5,
+    model_key: str = DEFAULT_MODEL_KEY,
+) -> pd.DataFrame:
     """
-    Execute a hybrid semantic search over the HP corpus.
+    Run a semantic search over precomputed HP chunks.
 
-    Parameters
-    ----------
-    query : str
-        The normalized question (LLM-normalized + synonym rewrite).
-    base_k : int
-        k to return after re-ranking.
-    exp_k : int
-        How many FAISS neighbors to retrieve before re-ranking.
-    model_key : str
-        Which embedding model to use (minilm_l6, e5_small, bge_base).
-    alpha : float
-        Weight for semantic vs lexical score (semantic_weight = alpha).
-    top_return : int
-        Number of top passages to return to the UI.
-    apply_boosts : bool
-        Whether to apply title/entity boosts & penalties. (Kept for future flexibility.)
+    Args:
+        query: User question / search text.
+        k:     Number of results to return.
+        model_key: One of EMBED_MODELS keys.
 
-    Returns
-    -------
-    dict with:
-        "results": DataFrame of retrieved passages (text + metadata + scores)
-        "expanded_query": None  (placeholder for future expansion)
+    Returns:
+        pandas.DataFrame with at least:
+        ['title', 'book', 'chapter', 'chunk_id', 'text', 'score']
     """
+    query = (query or "").strip()
+    if not query:
+        return pd.DataFrame()
 
-    # NOTE: The deployed retrieval currently uses semantic-only scoring
-    # due to safety constraints (no TF-IDF matrix shipped).
-    # alpha is still passed for forward compatibility.
+    if model_key not in EMBED_MODELS:
+        model_key = DEFAULT_MODEL_KEY
 
-    # Call underlying retrieval engine
-    hits_df = search_hybrid(
-        query,
-        k=top_return,   # how many results returned AFTER reranking
-        alpha=alpha,
-        key=model_key,
-        m=exp_k,        # FAISS search depth
-    )
+    # Delegate to retrieval_api; this will:
+    # - Load hp_chunks.parquet from data/processed
+    # - Load the FAISS index for the chosen model
+    # - Encode the query and search
+    hits = search_semantic(query=query, k=k, key=model_key)
 
-    # Ensure DataFrame
-    if not isinstance(hits_df, pd.DataFrame):
-        try:
-            hits_df = pd.DataFrame(hits_df)
-        except Exception:
-            raise ValueError("search_hybrid did not return a DataFrame-like result.")
+    # For safety, make sure we always have a DataFrame
+    if not isinstance(hits, pd.DataFrame):
+        hits = pd.DataFrame(hits)
 
-    # Trim to requested top N
-    results = hits_df.head(top_return).reset_index(drop=True)
+    # Rename score column if needed
+    if "score" not in hits.columns:
+        # Our retrieval_api uses 'sem_score' – expose a generic 'score' too
+        if "sem_score" in hits.columns:
+            hits["score"] = hits["sem_score"]
 
-    return {
-        "results": results,
-        "expanded_query": None,     # placeholder for optional LLM expansions
-    }
+    return hits

@@ -218,7 +218,6 @@ try:
 except ValueError:
     default_profile_index = 0
 
-# We’ll show: profile | embedding model badge | top-k | alpha | temperature
 col1, col2, col3, col4, col5 = st.columns([1.6, 1.1, 1.1, 1.1, 1.1])
 
 with col1:
@@ -234,6 +233,17 @@ default_alpha = float(profile_cfg.get("alpha", 0.6))
 default_k = int(profile_cfg.get("k", 5))
 model_key = profile_cfg.get("model", "e5_small")
 
+# ---- reset temperature to 0.2 whenever profile changes ----
+if "last_profile_for_temp" not in st.session_state:
+    st.session_state.last_profile_for_temp = profile_name
+if "temperature" not in st.session_state:
+    st.session_state.temperature = 0.2
+
+if st.session_state.last_profile_for_temp != profile_name:
+    # profile changed → reset temperature
+    st.session_state.temperature = 0.2
+    st.session_state.last_profile_for_temp = profile_name
+
 with col2:
     st.markdown("**Embedding model**")
     st.markdown(f"`{model_key}`")
@@ -245,7 +255,7 @@ with col3:
         max_value=20,
         value=default_k,
         step=1,
-        key=f"top_k_{profile_name}",  # per-profile state so defaults follow k
+        key=f"top_k_{profile_name}",
     )
     st.caption("Range: 3 (very few passages) → 20 (many passages)")
 
@@ -256,7 +266,7 @@ with col4:
         max_value=1.0,
         value=default_alpha,
         step=0.05,
-        key=f"alpha_{profile_name}",  # per-profile state for α defaults
+        key=f"alpha_{profile_name}",
     )
     st.caption("0.0 = lexical-heavy · 1.0 = dense-heavy")
 
@@ -265,8 +275,9 @@ with col5:
         "Temperature",
         min_value=0.0,
         max_value=1.0,
-        value=0.2,
+        value=st.session_state.temperature,
         step=0.05,
+        key="temperature",
     )
     st.caption("0.0 = deterministic · 1.0 = very random/creative")
 
@@ -284,9 +295,6 @@ ask_clicked = st.button("Ask")
 if ask_clicked and query.strip():
     original_query = query.strip()
 
-    # ==============================
-    # Normalization + retrieval
-    # ==============================
     overall_t0 = time.time()
 
     kin_q, kin_info = apply_kinship_synonyms(original_query)
@@ -315,9 +323,6 @@ if ask_clicked and query.strip():
         st.warning("No passages retrieved.")
         st.stop()
 
-    # ==============================
-    # Build context + call LLM
-    # ==============================
     context_chunks = [r.get("text", "") for r in results if r.get("text")]
     context = "\n\n".join(context_chunks)
 
@@ -330,10 +335,6 @@ if ask_clicked and query.strip():
     )
     llm_t1 = time.time()
     llm_latency = llm_t1 - llm_t0
-
-    # ==============================
-    # Display results
-    # ==============================
 
     st.markdown("## ✅ Answer")
     st.write(answer)
@@ -362,7 +363,6 @@ if ask_clicked and query.strip():
                     st.markdown(" | ".join(meta_bits))
                 st.write(r.get("text", ""))
 
-    # Debug info
     with st.expander("🔧 Debug info"):
         st.json(
             {
