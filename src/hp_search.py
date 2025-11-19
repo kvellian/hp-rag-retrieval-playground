@@ -188,3 +188,28 @@ def hp_search(query: str,
         "expanded_query": exp_query,
         "results": merged,
     }
+
+# Example to add at the bottom of src/hp_search.py
+
+def run_search(query: str, k: int, alpha: float, profile_name: str):
+    """
+    Thin wrapper used by the Streamlit app.
+    Adapt the body so it uses your existing retrieval engine.
+    Must return a list of dicts with at least a 'text' field.
+    """
+    engine = get_or_build_engine(profile_name=profile_name)  # whatever you already have
+    hits = engine.search(query=query, k=k, alpha=alpha)
+
+    # Make sure each hit has 'text' and (optionally) 'source'/'score'
+    results = []
+    for h in hits:
+        results.append(
+            {
+                "text": h["text"],            # or h.text
+                "score": h.get("score", 0.0),
+                "source": h.get("source"),    # e.g., book + chapter
+                "doc_id": h.get("doc_id"),
+            }
+        )
+    return results
+
