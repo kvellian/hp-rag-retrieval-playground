@@ -192,32 +192,17 @@ using the three tuned embedding models:
 1. Pick a **retrieval profile** in the Settings section below. Notice how it sets the embedding model, α, and k defaults.  
 2. Type a Harry Potter question in the box and click **Ask**.  
 3. Play with **Hybrid weight α (dense vs lexical)** and **Top-k passages** to see how the retrieved passages and scores change.  
-4. Adjust the **Temperature** slider to control how “creative” the answer is.  
+4. Review the **Answer** and **Latency** sections to see how the system behaves.  
 5. Toggle **Show retrieved passages** if you want to inspect the chunks that the model is using.  
+6. Adjust the **Temperature** slider to test how random / creative the LLM model’s answers are.  
+   Low temperature is higher confidence and more conservative;  
+   high temperature introduces more randomness and creativity (but can drift away from precise facts).
 
 Behind the scenes, your question is lightly normalized (for example, “mom” → “mother”) and then sent to the retriever, but only your **original** question is shown in the UI.
-
----
-
-### Temperature (creativity of the LLM answer)
-
-The **Temperature** slider controls how random / creative the LLM model’s answers are.
-
-- **Low temperature (0.0 – 0.3)**  
-    - Model is very confident and conservative.  
-    - It sticks closely to the most likely wording and to the provided context.  
-    - Answers are more consistent and factual, less “chatty.”  
-
-- **Medium temperature (0.4 – 0.7)**  
-    - A bit more variation in phrasing.  
-    - Still mostly grounded, but may paraphrase or add stylistic flair.  
-
-- **High temperature (0.8 – 1.0)**  
-    - Much more randomness.  
-    - Good for brainstorming or creative writing.  
-    - Not ideal for precise, factual Q&A because it’s more likely to wander.
 """
 )
+
+st.markdown("---")
 
 # ---------- Settings row (replaces sidebar) ----------
 st.markdown("### Settings")
@@ -228,7 +213,8 @@ try:
 except ValueError:
     default_profile_index = 0
 
-col1, col2, col3, col4 = st.columns([1.6, 1.2, 1.2, 1.2])
+# We’ll show: profile | embedding model badge | top-k | alpha | temperature
+col1, col2, col3, col4, col5 = st.columns([1.6, 1.1, 1.1, 1.1, 1.1])
 
 with col1:
     profile_name = st.selectbox(
@@ -237,11 +223,18 @@ with col1:
         index=default_profile_index,
     )
 
+# Get profile config and derived defaults
 profile_cfg = RETRIEVAL_PROFILES.get(profile_name, RETRIEVAL_PROFILES[DEFAULT_PROFILE_NAME])
 default_alpha = float(profile_cfg.get("alpha", 0.6))
 default_k = int(profile_cfg.get("k", 5))
+model_key = profile_cfg.get("model", "e5_small")
 
 with col2:
+    st.markdown("**Embedding model**")
+    # Small badge-style code block
+    st.markdown(f"`{model_key}`")
+
+with col3:
     top_k = st.slider(
         "Top-k passages",
         min_value=3,
@@ -250,7 +243,7 @@ with col2:
         step=1,
     )
 
-with col3:
+with col4:
     alpha = st.slider(
         "Hybrid weight α",
         min_value=0.0,
@@ -259,7 +252,7 @@ with col3:
         step=0.05,
     )
 
-with col4:
+with col5:
     temperature = st.slider(
         "Temperature",
         min_value=0.0,
@@ -293,6 +286,7 @@ if ask_clicked and query.strip():
     retrieval_t0 = time.time()
     with st.status("🔍 Retrieving relevant passages...", expanded=True) as status_box:
         try:
+            # hp_search.run_search wrapper (old signature)
             results: List[Dict[str, Any]] = run_search(
                 query=norm_q,
                 k=int(top_k),
@@ -360,6 +354,7 @@ if ask_clicked and query.strip():
                     st.markdown(" | ".join(meta_bits))
                 st.write(r.get("text", ""))
 
+    # Debug info
     with st.expander("🔧 Debug info"):
         st.json(
             {
@@ -369,9 +364,12 @@ if ask_clicked and query.strip():
                 "kinship_info": kin_info,
                 "llm_norm_info": norm_info,
                 "profile": profile_name,
+                "embedding_model": model_key,
                 "alpha": float(alpha),
                 "top_k": int(top_k),
                 "openai_model": openai_model,
+                "temperature": float(temperature),
+                "total_latency": time.time() - overall_t0,
             }
         )
 
