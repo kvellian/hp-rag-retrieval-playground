@@ -2,7 +2,6 @@ import os
 import sys
 import re
 from pathlib import Path
-from typing import Tuple
 
 import pandas as pd
 import streamlit as st
@@ -10,12 +9,11 @@ import streamlit as st
 # ------------------------------------------------------------------
 # Paths & imports
 # ------------------------------------------------------------------
-
-# Repo root = folder where this file lives
+# Repo root (directory containing this file)
 BASE_DIR = Path(__file__).resolve().parent
 SRC_DIR = BASE_DIR / "src"
 
-# Make src importable
+# Make src/ importable
 if str(SRC_DIR) not in sys.path:
     sys.path.append(str(SRC_DIR))
 
@@ -47,7 +45,7 @@ KINSHIP_REPLACEMENTS = {
 }
 
 
-def apply_kinship_synonyms(raw_query: str) -> Tuple[str, str]:
+def apply_kinship_synonyms(raw_query: str) -> tuple[str, str]:
     """
     Replace informal kinship terms (mom, dad, etc.) with more formal versions
     that actually appear in the HP corpus (mother, father).
@@ -64,7 +62,7 @@ def apply_kinship_synonyms(raw_query: str) -> Tuple[str, str]:
     return q, info
 
 
-def normalize_query_with_llm(raw_query: str) -> Tuple[str, str]:
+def normalize_query_with_llm(raw_query: str) -> tuple[str, str]:
     """
     Use a small LLM to rewrite the question into clean, canonical Harry Potter phrasing.
     If no API key is set or anything fails, returns the original query.
@@ -111,7 +109,7 @@ def normalize_query_with_llm(raw_query: str) -> Tuple[str, str]:
 
 
 # ------------------------------------------------------------------
-# LLM helpers for answering (always gpt-4o-mini under the hood)
+# LLM helpers for answering
 # ------------------------------------------------------------------
 
 def build_hp_prompt(question: str, context: str) -> str:
@@ -159,7 +157,7 @@ def call_llm(question: str, context: str) -> str:
 
 
 # ------------------------------------------------------------------
-# Streamlit UI (no sidebar – all controls in the main page)
+# Streamlit UI (no sidebar)
 # ------------------------------------------------------------------
 
 st.set_page_config(page_title="HP RAG — Retrieval Playground", layout="wide")
@@ -169,7 +167,8 @@ st.markdown(
     """
 **Created by:** Ken Vellian  
 **Data Science Capstone Project**  
-**Professor:** David Hubbard — DePaul University, Fall 2026
+**Professor:** David Hubbard  
+DePaul University | Fall 2026
 """
 )
 
@@ -178,16 +177,16 @@ st.markdown(
 This app lets you **interactively explore** the retrieval behavior of your RAG system
 using the three tuned embedding models:
 
-- `prod_e5_balanced` → **e5_small** — balanced accuracy + latency  
-- `fast_minilm` → **minilm_l6** — fastest model with strong hit@k  
-- `max_precision_bge` → **bge_base** — highest early precision (heavier model)  
+- `prod_e5_balanced` → **e5_small** (α=0.35, k=15) — balanced accuracy + latency  
+- `fast_minilm` → **minilm_l6** (α=0.50, k=17) — fastest model with strong hit@k  
+- `max_precision_bge` → **bge_base** (α=0.40, k=16) — highest early precision (heavier model)
 
 **How to use this playground:**
 
 1. Pick a **retrieval profile** above. Notice how it sets the embedding model, α, and k defaults.  
 2. Type a Harry Potter question in the box and click **Search**.  
 3. Play with **α (dense vs lexical)** and **Base k** to see how the retrieved passages and scores change.  
-4. Adjust **Expanded k**, **Show top N**, and **Use LLM to answer** if you want more passages or a generated answer.  
+4. Adjust **Expanded k**, **Show top N**, and **Use LLM to answer** if you want more passages or a generated answer.
 
 Behind the scenes, your question is lightly normalized (e.g., “mom” → “mother”) and then sent to the retriever, but only your original question is shown here.
 """
@@ -249,15 +248,14 @@ if st.button("Search") and query.strip():
     norm_q, norm_info = normalize_query_with_llm(kin_q)
 
     # ---- Run retrieval on the normalized query ----
-    # IMPORTANT: use positional args to match run_search signature exactly
     out = hp_search_fn(
-        norm_q,
-        int(base_k),
-        int(exp_k),
-        model_key,
-        float(alpha),
-        int(top_n),
-        True,  # apply_boosts
+        query=norm_q,
+        base_k=int(base_k),
+        exp_k=int(exp_k),
+        model_key=model_key,
+        alpha=float(alpha),
+        top_return=int(top_n),
+        apply_boosts=True,
     )
 
     st.subheader("🔍 Query info")
@@ -302,9 +300,9 @@ if st.button("Search") and query.strip():
     texts = results_df.get("text", pd.Series([], dtype=str)).fillna("")
     context = "\n\n".join(texts.tolist())
 
-    st.subheader("✅ Answer")
+    st.subheader("🧠 Answer")
     if use_llm:
-        # Important: we ask on the ORIGINAL question, but with context from normalized query.
+        # We ask on the ORIGINAL question, but with context from normalized query.
         answer = call_llm(raw_q, context)
         st.write(answer)
     else:
@@ -317,7 +315,7 @@ if st.button("Search") and query.strip():
 
     st.subheader("📖 Passages")
     for i, row in results_df.iterrows():
-        header = f"{i+1}. {row.get('title', '(no title)')}"
+        header = f"{i+1}. {row.get('title','(no title)')}"
         with st.expander(header):
             meta_bits = []
             if row.get("doc_type"):
