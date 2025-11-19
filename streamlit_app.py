@@ -175,17 +175,49 @@ st.markdown(
 """
 )
 
-with st.expander("What is this?", expanded=True):
-    st.markdown(
-        """
-This app lets you ask questions about the Harry Potter books. Under the hood it
-uses a Retrieval-Augmented Generation (RAG) pipeline:
+# ---------- Explanation block (always visible, no expander) ----------
+st.markdown(
+    """
+### What is this?
 
-1. Your question is lightly **normalized** (e.g., *mom → mother*).
-2. A tuned **retriever** finds the most relevant passages from the books.
-3. An **OpenAI model** uses only those passages to generate a grounded answer.
-        """
-    )
+This app lets you **interactively explore** the retrieval behavior of your RAG system
+using the three tuned embedding models:
+
+- `prod_e5_balanced` → **e5_small** (α=0.35, k=15) — balanced accuracy + latency  
+- `fast_minilm` → **minilm_l6** (α=0.50, k=17) — fastest model with strong hit@k  
+- `max_precision_bge` → **bge_base** (α=0.40, k=16) — highest early precision (heavier model)  
+
+**How to use this playground:**
+
+1. Pick a **retrieval profile** in the Settings section below. Notice how it sets the embedding model, α, and k defaults.  
+2. Type a Harry Potter question in the box and click **Ask**.  
+3. Play with **Hybrid weight α (dense vs lexical)** and **Top-k passages** to see how the retrieved passages and scores change.  
+4. Adjust the **Temperature** slider to control how “creative” the answer is.  
+5. Toggle **Show retrieved passages** if you want to inspect the chunks that the model is using.  
+
+Behind the scenes, your question is lightly normalized (for example, “mom” → “mother”) and then sent to the retriever, but only your **original** question is shown in the UI.
+
+---
+
+### Temperature (creativity of the LLM answer)
+
+The **Temperature** slider controls how random / creative the LLM model’s answers are.
+
+- **Low temperature (0.0 – 0.3)**  
+    - Model is very confident and conservative.  
+    - It sticks closely to the most likely wording and to the provided context.  
+    - Answers are more consistent and factual, less “chatty.”  
+
+- **Medium temperature (0.4 – 0.7)**  
+    - A bit more variation in phrasing.  
+    - Still mostly grounded, but may paraphrase or add stylistic flair.  
+
+- **High temperature (0.8 – 1.0)**  
+    - Much more randomness.  
+    - Good for brainstorming or creative writing.  
+    - Not ideal for precise, factual Q&A because it’s more likely to wander.
+"""
+)
 
 # ---------- Settings row (replaces sidebar) ----------
 st.markdown("### Settings")
