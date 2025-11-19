@@ -175,9 +175,10 @@ st.markdown(
 """
 )
 
-# ---------- Explanation block (always visible, no expander) ----------
-st.markdown(
-    """
+# ---------- Explanation in an expander ----------
+with st.expander("What is this?", expanded=False):
+    st.markdown(
+        """
 ### What is this?
 
 This app lets you **interactively explore** the retrieval behavior of your RAG system
@@ -192,21 +193,19 @@ using the three tuned embedding models:
 1. Pick a **retrieval profile** in the Settings section below. Notice how it sets the embedding model, α, and k defaults.  
 2. Type a Harry Potter question in the box and click **Ask**.  
 3. Play with **Hybrid weight α (dense vs lexical)** and **Top-k passages** to see how the retrieved passages and scores change.  
-
-   - **Low α (near 0.0)** → puts more weight on **lexical** / keyword-style matching.  
-   - **High α (near 1.0)** → puts more weight on **dense** semantic embeddings.  
-   - **Low Top-k (3–5)** → uses only the very top passages (more focused, but may miss supporting context).  
-   - **High Top-k (15–20)** → uses more passages (broader context, but may include extra noise).  
-
+   * **Low α (near 0.0)** → puts more weight on **lexical** / keyword-style matching.  
+   * **High α (near 1.0)** → puts more weight on **dense** semantic embeddings.  
+   * **Low Top-k (3–5)** → uses only the very top passages (more focused, but may miss supporting context).  
+   * **High Top-k (15–20)** → uses more passages (broader context, but may include extra noise).  
 4. Review the **Answer** and **Latency** sections to see how the system behaves.  
 5. Toggle **Show retrieved passages** if you want to inspect the chunks that the model is using.  
 6. Adjust the **Temperature** slider to test how random / creative the LLM model’s answers are.  
-   Low temperature is higher confidence and more conservative;  
-   high temperature introduces more randomness and creativity (but can drift away from precise facts).
+   * Low temperature is higher confidence and more conservative.  
+   * High temperature introduces more randomness and creativity (but can drift away from precise facts).  
 
 Behind the scenes, your question is lightly normalized (for example, “mom” → “mother”) and then sent to the retriever, but only your **original** question is shown in the UI.
 """
-)
+    )
 
 st.markdown("---")
 
@@ -244,10 +243,10 @@ with col3:
         "Top-k passages",
         min_value=3,
         max_value=20,
-        value=min(5, default_k),
+        value=default_k,
         step=1,
+        key=f"top_k_{profile_name}",  # per-profile state so defaults follow k
     )
-    # Permanent range hint
     st.caption("Range: 3 (very few passages) → 20 (many passages)")
 
 with col4:
@@ -257,8 +256,8 @@ with col4:
         max_value=1.0,
         value=default_alpha,
         step=0.05,
+        key=f"alpha_{profile_name}",  # per-profile state for α defaults
     )
-    # Permanent range hint
     st.caption("0.0 = lexical-heavy · 1.0 = dense-heavy")
 
 with col5:
@@ -269,7 +268,6 @@ with col5:
         value=0.2,
         step=0.05,
     )
-    # Permanent range hint
     st.caption("0.0 = deterministic · 1.0 = very random/creative")
 
 # Always use gpt-4o-mini; no dropdown
@@ -297,7 +295,6 @@ if ask_clicked and query.strip():
     retrieval_t0 = time.time()
     with st.status("🔍 Retrieving relevant passages...", expanded=True) as status_box:
         try:
-            # hp_search.run_search wrapper (old signature)
             results: List[Dict[str, Any]] = run_search(
                 query=norm_q,
                 k=int(top_k),
