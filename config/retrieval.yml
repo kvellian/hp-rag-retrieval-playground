@@ -1,0 +1,13 @@
+# retrieval config written from Notebook 4
+defaults:
+  top_k: 5
+  top_m: 200
+  short_penalty_len: 80
+  short_penalty: 0.95
+  title_bonus_1tok: 0.05
+  title_bonus_2tok: 0.05
+  entity_boost: 1.08
+alphas:
+  bge_base: 0.6
+  e5_small: 0.8
+  minilm_l6: 0.8
