@@ -170,8 +170,10 @@ st.title("⚡ Harry Potter RAG — Retrieval Playground")
 st.markdown(
     """
 **Created by:** Ken Vellian  
-**Data Science Capstone Project**  
-**Professor:** David Hubbard — DePaul University, Fall 2026
+**Data Science Capstone Project:**
+**Harry Potter Retrieval-Augmented Generation (RAG) System**  
+**Professor:** David Hubbard
+** DePaul University | Fall 2026 **
 """
 )
 
@@ -184,9 +186,9 @@ with st.expander("What is this?", expanded=False):
 This app lets you **interactively explore** the retrieval behavior of your RAG system
 using the three tuned embedding models:
 
-- `prod_e5_balanced` → **e5_small** (α=0.35, k=15) — balanced accuracy + latency  
-- `fast_minilm` → **minilm_l6** (α=0.50, k=17) — fastest model with strong hit@k  
-- `max_precision_bge` → **bge_base** (α=0.40, k=16) — highest early precision (heavier model)  
+- `prod_e5_balanced` → **e5_small** (α=0.55, k=17) — balanced accuracy + latency  
+- `fast_minilm` → **minilm_l6** (α=0.75, k=16) — fastest model with strong hit@k  
+- `max_precision_bge` → **bge_base** (α=0.50, k=15) — highest early precision (heavier model)  
 
 **How to use this playground:**
 
@@ -203,7 +205,7 @@ using the three tuned embedding models:
    * Low temperature is higher confidence and more conservative.  
    * High temperature introduces more randomness and creativity (but can drift away from precise facts).  
 
-Behind the scenes, your question is lightly normalized (for example, “mom” → “mother”) and then sent to the retriever, but only your **original** question is shown in the UI.
+Behind the scenes, your question is lightly normalized (for example, “mom” → “mother”) and then sent to the retriever. Normalized question result can be found under 🔧 Debug Info.
 """
     )
 
@@ -240,7 +242,6 @@ if "temperature" not in st.session_state:
     st.session_state.temperature = 0.2
 
 if st.session_state.last_profile_for_temp != profile_name:
-    # profile changed → reset temperature
     st.session_state.temperature = 0.2
     st.session_state.last_profile_for_temp = profile_name
 
@@ -287,9 +288,9 @@ openai_model = "gpt-4o-mini"
 show_passages = st.checkbox("Show retrieved passages", value=True)
 
 # ---------- Question + results ----------
-st.markdown("## Ask a question about the Harry Potter books")
+st.markdown("## 🧙‍♂️ Ask a question - The Wizarding World of Harry Potter")
 
-query = st.text_input("🧙‍♂️ Ask a Harry Potter question", placeholder="Enter your question")
+query = st.text_input("🪄 Ask a Harry Potter question", placeholder="Enter your question")
 ask_clicked = st.button("Ask")
 
 if ask_clicked and query.strip():
@@ -363,7 +364,7 @@ if ask_clicked and query.strip():
                     st.markdown(" | ".join(meta_bits))
                 st.write(r.get("text", ""))
 
-    with st.expander("🔧 Debug info"):
+    with st.expander("🔧 Debug Info"):
         st.json(
             {
                 "original_query": original_query,
