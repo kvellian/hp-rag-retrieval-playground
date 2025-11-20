@@ -186,7 +186,7 @@ with st.expander("What is this?", expanded=False):
         """
 ### What is this?
 
-This app lets you **interactively explore** the retrieval behavior of your RAG system
+This app lets you **interactively explore** the behavior of 3 different models in this RAG system
 using the three tuned embedding models:
 
 - `prod_e5_balanced` → **e5_small** (α=0.55, k=17) — balanced accuracy + latency  
