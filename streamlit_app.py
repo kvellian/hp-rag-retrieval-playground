@@ -176,7 +176,7 @@ st.markdown(
 
 **Professor:** David Hubbard
 
-** DePaul University | Fall 2026 **
+** DePaul University - Fall 2026 **
 """
 )
 
