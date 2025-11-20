@@ -172,7 +172,7 @@ st.markdown(
 **Created by:** Ken Vellian
   
 **Data Science Capstone:**
-`Harry Potter Retrieval-Augmented Generation (RAG) System`  
+`⚡ Harry Potter Retrieval-Augmented Generation (RAG) System`  
 
 **Professor:** David Hubbard
 
