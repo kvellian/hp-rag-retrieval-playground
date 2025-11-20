@@ -386,4 +386,4 @@ if ask_clicked and query.strip():
         )
 
 elif not query.strip():
-    st.info("Type a Harry Potter question above and click **Ask**.")
+    st.info("📚 Type a Harry Potter question above and click **Ask**.")
