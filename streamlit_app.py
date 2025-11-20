@@ -215,7 +215,7 @@ Behind the scenes, your question is lightly normalized (for example, “mom” �
 st.markdown("---")
 
 # ---------- Settings row (replaces sidebar) ----------
-st.markdown("### Settings")
+st.markdown("### 📜 Settings")
 
 # Figure out default profile index
 try:
