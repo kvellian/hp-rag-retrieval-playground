@@ -181,10 +181,10 @@ st.markdown(
 )
 
 # ---------- Explanation in an expander ----------
-with st.expander("🔮 What is this?", expanded=False):
+with st.expander("What is this?", expanded=False):
     st.markdown(
         """
-### What is this?
+### 🔮 What is this?
 
 This app lets you **interactively explore** the behavior in this RAG system
 using the three tuned embedding models:
