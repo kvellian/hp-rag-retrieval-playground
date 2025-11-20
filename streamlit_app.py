@@ -171,8 +171,11 @@ st.markdown(
     """
 **Created by:** Ken Vellian  
 **Data Science Capstone Project:**
+
 **Harry Potter Retrieval-Augmented Generation (RAG) System**  
+
 **Professor:** David Hubbard
+
 ** DePaul University | Fall 2026 **
 """
 )
