@@ -292,7 +292,7 @@ show_passages = st.checkbox("Show retrieved passages", value=True)
 
 # ---------- Question + results ----------
 st.markdown("## 🧙‍♂️ Ask a question - The Wizarding World of Harry Potter")
-st.markdown("### Ask a Harry Potter question🪄")
+st.markdown("### 🪄 Ask a Harry Potter question")
 
 query = st.text_input("", placeholder="Enter your question✨")
 ask_clicked = st.button("Ask")
