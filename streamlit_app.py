@@ -186,7 +186,7 @@ with st.expander("What is this?", expanded=False):
         """
 ### What is this?
 
-This app lets you **interactively explore** the behavior of 3 different models in this RAG system
+This app lets you **interactively explore** the behavior in this RAG system
 using the three tuned embedding models:
 
 - `prod_e5_balanced` → **e5_small** (α=0.55, k=17) — balanced accuracy + latency  
@@ -208,7 +208,7 @@ using the three tuned embedding models:
    * Low temperature is higher confidence and more conservative.  
    * High temperature introduces more randomness and creativity (but can drift away from precise facts).  
 
-Behind the scenes, your question is lightly normalized (for example, “mom” → “mother”) and then sent to the retriever. Normalized question result can be found under 🔧 Debug Info.
+Behind the scenes, your question is lightly normalized (for example, “mom” → “mother”) and then sent to the retriever. Normalized question results can be found under 🔧 Debug Info.
 """
     )
 
